@@ -534,6 +534,7 @@ Canon EOS 20Da;22.5
 Canon EOS 300D;22.7
 Canon EOS 30D;22.5
 Canon EOS 350D;22.2
+Canon EOS 350D DIGITAL;22.2
 Canon EOS 4000D;22.3
 Canon EOS 400D Rebel XTi;22.2
 Canon EOS 400D;22.2
@@ -6873,3 +6874,8 @@ Zuk Z1;4.69
 Zuk Z2 Pro;4.61
 Zuk Z2 Rio Edition;4.54
 Zuk Z2;4.61
+SM-N910F;6.09
+SM-N950F;6.0
+iPad Air 2;3.65
+iPad Pro (12.9-inch);6.0
+iPad Pro;3.65
