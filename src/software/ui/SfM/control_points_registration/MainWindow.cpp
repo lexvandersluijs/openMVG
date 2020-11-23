@@ -118,16 +118,18 @@ void MainWindow::saveProject()
     msgBox.exec();
   }
 
-  // Store SfM_Data views & intrinsic data
-  if (!Save(
-      m_doc._sfm_data,
-      stlplus::create_filespec(dir.toStdString(), "cameras_openmvg_gcr.json").c_str(),
-      ESfM_Data(VIEWS | INTRINSICS | EXTRINSICS)))
-  {
-      QMessageBox msgBox;
-      msgBox.setText("Cannot save the cameras_openmvg_gcr.json file.");
-      msgBox.exec();
-  }
+  // LvdS: Export SfM_Data views & intrinsic data to a JSON file, so that we can read this in ACR. 
+  // Indenting these lines so that they show up in Git properly. For some reason they were not visible 
+  // as a change earlier, not before the fork and not after.
+      if (!Save(
+          m_doc._sfm_data,
+          stlplus::create_filespec(dir.toStdString(), "cameras_openmvg_gcr.json").c_str(),
+          ESfM_Data(VIEWS | INTRINSICS | EXTRINSICS)))
+      {
+          QMessageBox msgBox;
+          msgBox.setText("Cannot save the cameras_openmvg_gcr.json file.");
+          msgBox.exec();
+      }
 }
 
 void MainWindow::openProject()
