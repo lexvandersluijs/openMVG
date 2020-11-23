@@ -117,6 +117,17 @@ void MainWindow::saveProject()
     msgBox.setText("Cannot save the sfm_data file.");
     msgBox.exec();
   }
+
+  // Store SfM_Data views & intrinsic data
+  if (!Save(
+      m_doc._sfm_data,
+      stlplus::create_filespec(dir.toStdString(), "cameras_openmvg_gcr.json").c_str(),
+      ESfM_Data(VIEWS | INTRINSICS | EXTRINSICS)))
+  {
+      QMessageBox msgBox;
+      msgBox.setText("Cannot save the cameras_openmvg_gcr.json file.");
+      msgBox.exec();
+  }
 }
 
 void MainWindow::openProject()
@@ -206,197 +217,201 @@ static std::string string_pattern_replace
 
 void MainWindow::registerProject()
 {
-  if (m_doc._sfm_data.control_points.size() < 3)
-  {
-    QMessageBox msgBox;
-    msgBox.setText("At least 3 control points are required.");
-    msgBox.exec();
-    return;
-  }
-
-  // Assert that control points can be triangulated
-  for (Landmarks::const_iterator iterL = m_doc._sfm_data.control_points.begin();
-    iterL != m_doc._sfm_data.control_points.end(); ++iterL)
-  {
-    if (iterL->second.obs.size() < 2)
+    if (m_doc._sfm_data.control_points.size() < 3)
     {
-      QMessageBox msgBox;
-      msgBox.setText("Each control point must be defined in at least 2 pictures.");
-      msgBox.exec();
-      return;
-    }
-  }
-
-  //---
-  // registration (coarse):
-  // - compute the 3D points corresponding to the control point observation for the SfM scene
-  // - compute a coarse registration between the controls points & the triangulated point
-  // - transform the scene according the found transformation
-  //---
-  std::map<IndexT, Vec3> map_control_points, map_triangulated;
-  
-  std::map<IndexT, double> map_triangulation_errors;
-  for (const auto & control_point_it : m_doc._sfm_data.control_points)
-  {
-    const Landmark & landmark = control_point_it.second;
-    //Triangulate the observations:
-    const Observations & obs = landmark.obs;
-    std::vector<Vec3> bearing;
-    std::vector<Mat34> poses;
-    bearing.reserve(obs.size());
-    poses.reserve(obs.size());
-
-    for (const auto & obs_it : obs)
-    {
-      const View * view = m_doc._sfm_data.views.at(obs_it.first).get();
-      if (!m_doc._sfm_data.IsPoseAndIntrinsicDefined(view))
-        continue;
-      const openMVG::cameras::IntrinsicBase * cam = m_doc._sfm_data.GetIntrinsics().at(view->id_intrinsic).get();
-      const openMVG::geometry::Pose3 pose = m_doc._sfm_data.GetPoseOrDie(view);
-      const Vec2 pt = obs_it.second.x;
-      bearing.emplace_back((*cam)(cam->get_ud_pixel(pt)));
-      poses.emplace_back(pose.asMatrix());
-    }
-    const Eigen::Map<const Mat3X> bearing_matrix(bearing[0].data(), 3, bearing.size());
-    Vec4 Xhomogeneous;
-    if (!TriangulateNViewAlgebraic(bearing_matrix, poses, &Xhomogeneous))
-    {
-      std::cout << "Invalid triangulation" << std::endl;
-      return;
-    }
-    const Vec3 X = Xhomogeneous.hnormalized();
-    // Test validity of the hypothesis (front of the cameras):
-    bool bCheirality = true;
-    int i(0);
-    double reprojection_error_sum(0.0);
-    for (const auto & obs_it : obs)
-    {
-      const View * view = m_doc._sfm_data.views.at(obs_it.first).get();
-      if (!m_doc._sfm_data.IsPoseAndIntrinsicDefined(view))
-        continue;
-
-      const Pose3 pose = m_doc._sfm_data.GetPoseOrDie(view);
-      bCheirality &= CheiralityTest(bearing[i], pose, X);
-      const openMVG::cameras::IntrinsicBase * cam = m_doc._sfm_data.GetIntrinsics().at(view->id_intrinsic).get();
-      const Vec2 pt = obs_it.second.x;
-      const Vec2 residual = cam->residual(pose(X), pt);
-      reprojection_error_sum += residual.norm();
-      ++i;
-    }
-    if (bCheirality) // Keep the point only if it has a positive depth
-    {
-      map_triangulated[control_point_it.first] = X;
-      map_control_points[control_point_it.first] = landmark.X;
-      map_triangulation_errors[control_point_it.first] = reprojection_error_sum/(double)bearing.size();
-    }
-    else
-    {
-      std::cout << "Control Point cannot be triangulated (not in front of the cameras)" << std::endl;
-      return;
-    }
-  }
-
-  if (map_control_points.size() < 3)
-  {
-    QMessageBox msgBox;
-    msgBox.setText("Insufficient number of triangulated control points.");
-    msgBox.exec();
-    return;
-  }
-
-  // compute the similarity
-  {
-    // data conversion to appropriate container
-    Mat x1(3, map_control_points.size()),
-        x2(3, map_control_points.size());
-    
-    IndexT id_col = 0;
-    for (const auto & cp : map_control_points)
-    {
-      x1.col(id_col) = map_triangulated[cp.first];
-      x2.col(id_col) = cp.second;
-      ++id_col;
+        QMessageBox msgBox;
+        msgBox.setText("At least 3 control points are required.");
+        msgBox.exec();
+        return;
     }
 
-    std::cout
-      << "Control points observation triangulations:\n"
-      << x1 << std::endl << std::endl
-      << "Control points coords:\n"
-      << x2 << std::endl << std::endl;
-
-    Vec3 t;
-    Mat3 R;
-    double S;
-    if (openMVG::geometry::FindRTS(x1, x2, &S, &t, &R))
-    {
-      openMVG::geometry::Refine_RTS(x1,x2,&S,&t,&R);
-      std::cout << "Found transform:\n"
-        << " scale: " << S << "\n"
-        << " rotation:\n" << R << "\n"
-        << " translation: "<< t.transpose() << std::endl;
-
-
-      //--
-      // Apply the found transformation as a 3D Similarity transformation matrix // S * R * X + t
-      //--
-
-      const openMVG::geometry::Similarity3 sim(geometry::Pose3(R, -R.transpose() * t/S), S);
-      openMVG::sfm::ApplySimilarity(sim, m_doc._sfm_data);
-
-      // Display some statistics:
-      std::stringstream os;
-      for (Landmarks::const_iterator iterL = m_doc._sfm_data.control_points.begin();
+    // Assert that control points can be triangulated
+    for (Landmarks::const_iterator iterL = m_doc._sfm_data.control_points.begin();
         iterL != m_doc._sfm_data.control_points.end(); ++iterL)
-      {
-        const IndexT CPIndex = iterL->first;
-        // If the control point has not been used, continue...
-        if (map_triangulation_errors.find(CPIndex) == map_triangulation_errors.end())
-          continue;
-
-        os
-          << "CP index: " << CPIndex << "\n"
-          << "CP triangulation error: " << map_triangulation_errors[CPIndex] << " pixel(s)\n"
-          << "CP registration error: "
-          << (sim(map_triangulated[CPIndex]) - map_control_points[CPIndex]).norm() << " user unit(s)"<< "\n\n";
-      }
-      std::cout << os.str();
-
-      QMessageBox msgBox;
-      msgBox.setText(QString::fromStdString(string_pattern_replace(os.str(), "\n", "<br>")));
-      msgBox.exec();
-    }
-    else
     {
-      QMessageBox msgBox;
-      msgBox.setText("Registration failed. Please check your Control Points coordinates.");
-      msgBox.exec();
+        if (iterL->second.obs.size() < 2)
+        {
+            QMessageBox msgBox;
+            msgBox.setText("Each control point must be defined in at least 2 pictures.");
+            msgBox.exec();
+            return;
+        }
     }
-  }
 
-  //---
-  // Bundle adjustment with GCP
-  //---
-  {
-    using namespace openMVG::sfm;
-    Bundle_Adjustment_Ceres::BA_Ceres_options options;
-    Bundle_Adjustment_Ceres bundle_adjustment_obj(options);
-    Control_Point_Parameter control_point_opt(20.0, true);
-    if (!bundle_adjustment_obj.Adjust(m_doc._sfm_data,
-        Optimize_Options
-        (
-          cameras::Intrinsic_Parameter_Type::NONE, // Keep intrinsic constant
-          Extrinsic_Parameter_Type::ADJUST_ALL, // Adjust camera motion
-          Structure_Parameter_Type::ADJUST_ALL, // Adjust structure
-          control_point_opt // Use GCP and weight more their observation residuals
-          )
+    //---
+    // registration (coarse):
+    // - compute the 3D points corresponding to the control point observation for the SfM scene
+    // - compute a coarse registration between the controls points & the triangulated point
+    // - transform the scene according the found transformation
+    //---
+    std::map<IndexT, Vec3> map_control_points, map_triangulated;
+
+    std::map<IndexT, double> map_triangulation_errors;
+    for (const auto& control_point_it : m_doc._sfm_data.control_points)
+    {
+        const Landmark& landmark = control_point_it.second;
+        //Triangulate the observations:
+        const Observations& obs = landmark.obs;
+        std::vector<Vec3> bearing;
+        std::vector<Mat34> poses;
+        bearing.reserve(obs.size());
+        poses.reserve(obs.size());
+
+        for (const auto& obs_it : obs)
+        {
+            const View* view = m_doc._sfm_data.views.at(obs_it.first).get();
+            if (!m_doc._sfm_data.IsPoseAndIntrinsicDefined(view))
+                continue;
+            const openMVG::cameras::IntrinsicBase* cam = m_doc._sfm_data.GetIntrinsics().at(view->id_intrinsic).get();
+            const openMVG::geometry::Pose3 pose = m_doc._sfm_data.GetPoseOrDie(view);
+            const Vec2 pt = obs_it.second.x;
+            bearing.emplace_back((*cam)(cam->get_ud_pixel(pt)));
+            poses.emplace_back(pose.asMatrix());
+        }
+        const Eigen::Map<const Mat3X> bearing_matrix(bearing[0].data(), 3, bearing.size());
+        Vec4 Xhomogeneous;
+        if (!TriangulateNViewAlgebraic(bearing_matrix, poses, &Xhomogeneous))
+        {
+            std::cout << "Invalid triangulation" << std::endl;
+            return;
+        }
+        const Vec3 X = Xhomogeneous.hnormalized();
+        // Test validity of the hypothesis (front of the cameras):
+        bool bCheirality = true;
+        int i(0);
+        double reprojection_error_sum(0.0);
+        for (const auto& obs_it : obs)
+        {
+            const View* view = m_doc._sfm_data.views.at(obs_it.first).get();
+            if (!m_doc._sfm_data.IsPoseAndIntrinsicDefined(view))
+                continue;
+
+            const Pose3 pose = m_doc._sfm_data.GetPoseOrDie(view);
+            bCheirality &= CheiralityTest(bearing[i], pose, X);
+            const openMVG::cameras::IntrinsicBase* cam = m_doc._sfm_data.GetIntrinsics().at(view->id_intrinsic).get();
+            const Vec2 pt = obs_it.second.x;
+            const Vec2 residual = cam->residual(pose(X), pt);
+            reprojection_error_sum += residual.norm();
+            ++i;
+        }
+        if (bCheirality) // Keep the point only if it has a positive depth
+        {
+            map_triangulated[control_point_it.first] = X;
+            map_control_points[control_point_it.first] = landmark.X;
+            map_triangulation_errors[control_point_it.first] = reprojection_error_sum / (double)bearing.size();
+        }
+        else
+        {
+            std::cout << "Control Point cannot be triangulated (not in front of the cameras)" << std::endl;
+            return;
+        }
+    }
+
+    if (map_control_points.size() < 3)
+    {
+        QMessageBox msgBox;
+        msgBox.setText("Insufficient number of triangulated control points.");
+        msgBox.exec();
+        return;
+    }
+
+    // compute the similarity
+    {
+        // data conversion to appropriate container
+        Mat x1(3, map_control_points.size()),
+            x2(3, map_control_points.size());
+
+        IndexT id_col = 0;
+        for (const auto& cp : map_control_points)
+        {
+            x1.col(id_col) = map_triangulated[cp.first];
+            x2.col(id_col) = cp.second;
+            ++id_col;
+        }
+
+        std::cout
+            << "Control points observation triangulations:\n"
+            << x1 << std::endl << std::endl
+            << "Control points coords:\n"
+            << x2 << std::endl << std::endl;
+
+        Vec3 t;
+        Mat3 R;
+        double S;
+        if (openMVG::geometry::FindRTS(x1, x2, &S, &t, &R))
+        {
+            openMVG::geometry::Refine_RTS(x1, x2, &S, &t, &R);
+            std::cout << "Found transform:\n"
+                << " scale: " << S << "\n"
+                << " rotation:\n" << R << "\n"
+                << " translation: " << t.transpose() << std::endl;
+
+
+            //--
+            // Apply the found transformation as a 3D Similarity transformation matrix // S * R * X + t
+            //--
+
+            const openMVG::geometry::Similarity3 sim(geometry::Pose3(R, -R.transpose() * t / S), S);
+            openMVG::sfm::ApplySimilarity(sim, m_doc._sfm_data);
+
+            // Display some statistics:
+            std::stringstream os;
+            for (Landmarks::const_iterator iterL = m_doc._sfm_data.control_points.begin();
+                iterL != m_doc._sfm_data.control_points.end(); ++iterL)
+            {
+                const IndexT CPIndex = iterL->first;
+                // If the control point has not been used, continue...
+                if (map_triangulation_errors.find(CPIndex) == map_triangulation_errors.end())
+                    continue;
+
+                os
+                    << "CP index: " << CPIndex << "\n"
+                    << "CP triangulation error: " << map_triangulation_errors[CPIndex] << " pixel(s)\n"
+                    << "CP registration error: "
+                    << (sim(map_triangulated[CPIndex]) - map_control_points[CPIndex]).norm() << " user unit(s)" << "\n\n";
+            }
+            std::cout << os.str();
+
+            QMessageBox msgBox;
+            msgBox.setText(QString::fromStdString(string_pattern_replace(os.str(), "\n", "<br>")));
+            msgBox.exec();
+        }
+        else
+        {
+            QMessageBox msgBox;
+            msgBox.setText("Registration failed. Please check your Control Points coordinates.");
+            msgBox.exec();
+        }
+    }
+
+    if (m_doBundleAdjustment)
+        //---
+        // Bundle adjustment with GCP
+        //---
+    {
+        std::cout << "Performing bundle adjustment" << endl;
+
+        using namespace openMVG::sfm;
+        Bundle_Adjustment_Ceres::BA_Ceres_options options;
+        Bundle_Adjustment_Ceres bundle_adjustment_obj(options);
+        Control_Point_Parameter control_point_opt(20.0, true);
+        if (!bundle_adjustment_obj.Adjust(m_doc._sfm_data,
+            Optimize_Options
+            (
+                cameras::Intrinsic_Parameter_Type::NONE, // Keep intrinsic constant
+                Extrinsic_Parameter_Type::ADJUST_ALL, // Adjust camera motion
+                Structure_Parameter_Type::ADJUST_ALL, // Adjust structure
+                control_point_opt // Use GCP and weight more their observation residuals
+            )
         )
-      )
-    {
-      QMessageBox msgBox;
-      msgBox.setText("BA with GCP failed.");
-      msgBox.exec();
+            )
+        {
+            QMessageBox msgBox;
+            msgBox.setText("BA with GCP failed.");
+            msgBox.exec();
+        }
     }
-  }
+    
 }
 
 MainWindow::MainWindow
@@ -413,6 +428,8 @@ MainWindow::MainWindow
 
   QMainWindow::statusBar()->showMessage("Welcome in Control_point_editor GUI.");
   resize(640, 480);
+
+  m_doBundleAdjustment = false;
 }
 
 void MainWindow::createPanel()
@@ -513,4 +530,9 @@ void MainWindow::createConnections()
     ,this
     ,SLOT(doubleClickImageList())
     );
+}
+
+void MainWindow::SetDoBundleAdjustment(bool doBundleAdjustment)
+{
+    m_doBundleAdjustment = doBundleAdjustment;
 }

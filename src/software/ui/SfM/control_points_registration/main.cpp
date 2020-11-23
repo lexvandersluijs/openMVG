@@ -8,12 +8,31 @@
 
 #include <QApplication>
 #include "MainWindow.hpp"
+using namespace std;
 
 int main(int argc, char ** argv)
 {
   QApplication app(argc, argv);
+  QCoreApplication::setApplicationName("OpenMVG GCR tool");
+  QCoreApplication::setApplicationVersion("1.0");
+
+  QCommandLineParser parser;
+  parser.setApplicationDescription("GCR tool");
+  parser.addHelpOption();
+  parser.addVersionOption();
+
+  QCommandLineOption bundleAdjustmentOption("b", QCoreApplication::translate("main", "Perform bundle adjustment"));
+  parser.addOption(bundleAdjustmentOption);
+
+  // Process the actual command line arguments given by the user
+  parser.process(app);
+
+  bool doBundleAdjustment = parser.isSet(bundleAdjustmentOption);
+
+  cout << "doBundleAdjustment = " << doBundleAdjustment << endl;
 
   MainWindow * mainWindow = new MainWindow;
+  mainWindow->SetDoBundleAdjustment(doBundleAdjustment);
   mainWindow->show();
 
   return app.exec();

@@ -270,6 +270,16 @@ int main(int argc, char **argv)
       stlplus::create_filespec(sOutDir, "cloud_and_poses", ".ply"),
       ESfM_Data(ALL));
 
+
+    // Store SfM_Data views & intrinsic data
+    if (!Save(
+        sfm_data,
+        stlplus::create_filespec(sOutDir, "cameras_openmvg.json").c_str(),
+        ESfM_Data(VIEWS | INTRINSICS | EXTRINSICS)))
+    {
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
   }
   return EXIT_FAILURE;

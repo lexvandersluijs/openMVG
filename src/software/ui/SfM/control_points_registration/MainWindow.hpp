@@ -48,6 +48,8 @@ private:
   control_point_GUI::GraphicsView * m_widget;
   // -- END VIEW
 
+  bool m_doBundleAdjustment;
+
   private slots:
 
   /// Delete all the SfM_Data scene control points
@@ -97,6 +99,8 @@ public:
 
   /// Establish action-event connections
   void createConnections();
+
+  void SetDoBundleAdjustment(bool doBundleAdjustment);
 };
 
 #endif /* MAINWINDOW_HPP */
