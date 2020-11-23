@@ -80,7 +80,10 @@ struct Tracker_opencv_KLT : public Abstract_Tracker
     std::vector<cv::KeyPoint> m_nextKeypoints;
 
     cv::Ptr<cv::FeatureDetector> m_detector = cv::GFTTDetector::create(count);
-    if (m_detector == NULL)
+//    if (m_detector == NULL) //Severity	Code	Description	Project	File	Line	Suppression State
+//		Error	C2666	'operator ==': 3 overloads have similar conversions	openMVG_main_AlternativeVO	C : \Projects\libraries\openMVG - develop\src\software\VO\Tracker_opencv_klt.hpp	83
+
+	if (m_detector.empty())
       return false;
 
     m_detector->detect(current_img, m_nextKeypoints);
